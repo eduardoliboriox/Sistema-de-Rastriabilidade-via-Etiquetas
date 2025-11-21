@@ -64,10 +64,10 @@ Sistema de Rastreabilidade via Etiquetas/
 - Ponto-07 Objetivo: Estoque. Marcar ponto de PRODUÇÃO, tem os dois botões, mas eles marcam somente produção, para sabermos que o material acabou de sair da empresa para ser entregue de caminhão até a fábrica do cliente.
 
 - 3. Como o Sistema Funciona
-3.1 Cadastro de Modelos
-Cada produto/modelo recebe um cadastro contendo:
-•	Código
-•	Nome
+- 3.1 Cadastro de Modelos
+- Cada produto/modelo recebe um cadastro contendo:
+-	Código
+-	Nome
 •	Cliente
 •	Linha e setor inicial
 •	Lote
