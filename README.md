@@ -1,7 +1,9 @@
-# 🏷️ Sistema de Etiquetas com QR Code
+# 🏷️ Sistema de Rastreabilidade via Etiquetas
 
-Um sistema web simples desenvolvido em **Python (Flask)** para **geração, visualização e histórico de etiquetas com QR Codes**.  
-Ideal para ambientes industriais, controle de produção ou rastreabilidade de produtos.
+O Sistema de Rastreabilidade via Etiquetas é uma plataforma interna desenvolvida para controlar, monitorar e registrar toda a movimentação de placas/peças dentro do fluxo produtivo.
+Ele utiliza QR Codes, etiquetas individuais por lote e pontos de rastreio (terminais) instalados nos setores para garantir que cada item seja rastreado desde a produção até a expedição.
+É um sistema totalmente automatizado, em tempo real, que substitui controles manuais (planilhas, papéis, anotações), reduz falhas humanas e aumenta a confiabilidade da informação.
+
 
 ---
 
