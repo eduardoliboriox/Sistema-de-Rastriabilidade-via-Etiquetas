@@ -68,7 +68,7 @@ Desenvolvido por Eduardo Libório
 
 
 
-AGUARDAR
+GUARDAR
 
   {% if request.args.get('auto_print') %}
   <script>
