@@ -43,12 +43,19 @@
     <form action="{{ url_for('movimentar') }}" method="post" class="card p-4 shadow-sm border-0 rounded-4 bg-light">
         <input type="hidden" name="ponto_url" value="{{ request.args.get('p') or request.args.get('ponto') }}">
         
-        <!-- QR CODE -->
-        <div class="mb-4">
-            <label for="qr_code" class="form-label fw-bold">Bipe o QR Code:</label>
-            <input type="text" name="qr_code" id="qr_code" class="form-control form-control-lg text-center"
-                   placeholder="Bipe o QR Code aqui" required autofocus>
-        </div>
+            <!-- QR CODE -->
+            <div class="mb-4">
+                <label for="qr_code" class="form-label fw-bold">Bipe o QR Code:</label>
+                <input type="text"
+                    name="qr_code"
+                    id="qr_code"
+                    class="form-control form-control-lg text-center"
+                    placeholder="Bipe o QR Code aqui"
+                    value="{{ clean_display_code }}"
+                    required
+                    autofocus>
+            </div>
+
 
         <!-- PONTO -->
         <div class="mb-4">
@@ -145,9 +152,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     input.focus();
 
-    // Se o scanner enviar Enter, não submeter.
-    // Em vez disso, movemos foco para o seletor de Ponto para que o operador escolha o PONTO.
-    input.addEventListener('keypress', (e) => {
+     input.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
             if (pontoSelect && pontoSelect.value) {
@@ -159,14 +164,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Botões de ação -> selecionam o hidden input e (agora) NÃO submetem o form automaticamente;
-    // em vez disso, preenche o input escondido e foca no botão 'Registrar' para permitir revisão.
         document.querySelectorAll('.action-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 const acao = btn.getAttribute('data-value');
                 document.getElementById('acao').value = acao;
 
-                // opcional: adiciona uma classe visual de selecionado
                 document.querySelectorAll('.action-btn').forEach(b=>b.classList.remove('active'));
                 btn.classList.add('active');
 

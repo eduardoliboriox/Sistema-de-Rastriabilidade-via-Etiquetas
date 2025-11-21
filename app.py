@@ -94,18 +94,17 @@ def add_missing_column():
     if "setor" not in columns:
         c.execute("ALTER TABLE models ADD COLUMN setor TEXT;")
 
-    # ➕ Nova coluna fase (existente em seu código)
     if "fase" not in columns:
         c.execute("ALTER TABLE models ADD COLUMN fase TEXT;")
 
-    # ➕ Nova coluna que define se o modelo é TOP_ONLY ou TOP_BOTTOM
     if "phase_type" not in columns:
         c.execute("ALTER TABLE models ADD COLUMN phase_type TEXT DEFAULT 'TOP_ONLY';")
 
+    if "operadora" not in columns:
+        c.execute("ALTER TABLE models ADD COLUMN operadora TEXT;")
+
     conn.commit()   
     conn.close()
-
-
 
 def add_missing_table_labels():
     conn = sqlite3.connect(DB_PATH)
@@ -190,8 +189,7 @@ with app.app_context():
     add_missing_table_movements()
 
 # ---------------- Regras de Ponto / Roteiro ----------------
-# Definimos um mapeamento básico dos pontos para setores.
-# Observação: a lógica pode ser expandida conforme regras do seu roteiro.
+# Definir um mapeamento básico dos pontos para setores.
 POINT_RULES = {
     "Ponto-01": {"setor": "PTH", "type": "porta"},
     "Ponto-02": {"setor": "SMT", "type": "porta"},
@@ -206,11 +204,9 @@ def normalize_lote_from_qr(lote_sufixo):
     """Converte o sufixo vindo do QR (ex: '08-504' ou '08-504-xyz') para o formato salvo '08 / 504' (aprox)."""
     if not lote_sufixo:
         return None
-    # substitui hífens por ' / ' em duas primeiras partes, se tiver apenas uma parte retorna como está
     parts = lote_sufixo.split("-")
     if len(parts) == 1:
         return parts[0].replace('-', ' / ').strip()
-    # junta primeira e segunda como 'NN / PPP' e ignora extras (ou junta com ' - ')
     first = parts[0].strip()
     second = parts[1].strip() if len(parts) > 1 else ""
     return f"{first} / {second}"
@@ -281,8 +277,8 @@ def new():
         try:
             conn.execute(
                 """INSERT INTO models 
-                    (code, model_name, cliente, linha, setor, fase, phase_type, turno, data, lote, quantidade, revisora, horario, po, op, status_cq, processo, obs, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (code, model_name, cliente, linha, setor, fase, phase_type, turno, data, lote, quantidade, revisora, operadora, horario, po, op, status_cq, processo, obs, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 (
                     f.get("code", ""),
@@ -297,6 +293,7 @@ def new():
                     f"{f.get('lote_num', '').strip()} / {f.get('lote_padrao', '').strip()}",
                     f.get("quantidade", ""),
                     f.get("revisora", ""),
+                    f.get("operadora", ""),
                     f.get("horario", ""),
                     f.get("po", ""),
                     f.get("op", ""),
@@ -332,7 +329,6 @@ def edit(id):
         if request.method == "POST":
             f = request.form
 
-            # Montagem do lote (corrigido!)
             lote_num = f.get("lote_num", "").strip()
             lote_padrao = f.get("lote_padrao", "").strip()
             lote_final = f"{lote_num} / {lote_padrao}"
@@ -341,7 +337,7 @@ def edit(id):
                 conn.execute("""
                     UPDATE models 
                     SET code=?, model_name=?, cliente=?, linha=?, setor=?, fase=?, phase_type=?, turno=?, data=?, 
-                        lote=?, quantidade=?, revisora=?, horario=?, po=?, op=?, status_cq=?, processo=?, obs=?, updated_at=?
+                        lote=?, quantidade=?, revisora=?, operadora=?, horario=?, po=?, op=?, status_cq=?, processo=?, obs=?, updated_at=?
                     WHERE id=?
                 """, (
                     f["code"],
@@ -356,6 +352,7 @@ def edit(id):
                     lote_final,
                     f["quantidade"],
                     f["revisora"],
+                    f["operadora"],
                     f["horario"],
                     f["po"],
                     f.get("op", ""),
@@ -368,7 +365,6 @@ def edit(id):
             except sqlite3.IntegrityError:
                 flash("❌ Já existe um modelo com este CODE. Escolha outro.", "danger")
                 return redirect(url_for("edit", id=id))
-
 
             # REGISTRAR HISTÓRICO
             conn.execute(
@@ -398,8 +394,6 @@ def edit(id):
         raise e
     finally:
         conn.close()
-
-
 
 @app.route("/view/<int:id>", methods=["GET", "POST"])
 def view_label(id):
@@ -479,10 +473,9 @@ def qr(code):
 
     # 🔹 Gera a URL completa (agora compatível com códigos únicos)
     # OBS: os terminais/físicos onde o QR será lido podem adicionar o parâmetro ?p=Ponto-01
-    # <-- GERAR QR APENAS COM O CÓDIGO (SEM URL)
-    qr_payload = code.strip()   # exemplo: "203110482-25-504"
+    qr_url = f"http://{local_ip}:5000/movimentar/{code.strip()}"
 
-    img = qrcode.make(qr_payload)
+    img = qrcode.make(qr_url)
     buf = BytesIO()
     img.save(buf, "PNG")
     buf.seek(0)
@@ -490,306 +483,293 @@ def qr(code):
 
 @app.route("/movimentar", methods=["GET", "POST"])
 def movimentar():
-    print("=== DEBUG MOVIMENTAR ===")
-    print("REQUEST ARGS:", dict(request.args))
-    print("REQUEST FORM:", dict(request.form))
-
-    # =====================================================
-    # CAPTURA DO PONTO — funciona em GET e POST
-    # =====================================================
-    ponto_url = (
-        request.form.get("ponto_url") or
-        request.args.get("p") or
-        request.args.get("ponto")
-    )
-
+    ponto_url = request.form.get("ponto_url") or request.args.get("p") or request.args.get("ponto")
     model = None
     label = None
-
-    # =====================================================
-    # QR — pode vir via POST ou GET
-    # =====================================================
     full_code = request.form.get("qr_code") or request.args.get("qr_code")
+    clean_display_code = clean_display_qr(full_code)
+
+
+    SMT_FIRST_MODELS = ["A29659516", "A29659515", "A29639902", "ARC141295418400"]
 
     if full_code:
         full_code = extract_real_code(full_code)
-
         if not full_code:
             flash("QR inválido", "danger")
-            return redirect(url_for("movimentar", p=ponto_url) if ponto_url else url_for("movimentar"))
+            return redirect(url_for("movimentar", p=ponto_url))
 
-        # separa modelo e lote
         parts = full_code.split("-")
         base_code = parts[0].upper()
         lote_sufixo = "-".join(parts[1:]) if len(parts) > 1 else None
         lote_formatado = normalize_lote_from_qr(lote_sufixo) if lote_sufixo else None
 
         conn = get_db()
-        model_row = conn.execute(
-            "SELECT * FROM models WHERE UPPER(code)=?",
-            (base_code,)
-        ).fetchone()
-
+        model_row = conn.execute("SELECT * FROM models WHERE UPPER(code)=?", (base_code,)).fetchone()
         if not model_row:
             conn.close()
             flash(f"Código '{full_code}' não encontrado.", "danger")
-            return redirect(url_for("movimentar", p=ponto_url) if ponto_url else url_for("movimentar"))
-
+            return redirect(url_for("movimentar", p=ponto_url))
         model = dict(model_row)
 
-        # busca etiqueta
         if lote_formatado:
-            label = find_label(conn, model["id"], lote_formatado)
-
-        if not label:
-            cur = conn.execute(
-                "SELECT * FROM labels WHERE model_id=? ORDER BY created_at DESC LIMIT 1",
-                (model["id"],)
+            label_row = conn.execute(
+                "SELECT * FROM labels WHERE model_id=? AND lote=? ORDER BY id DESC LIMIT 1",
+                (model["id"], lote_formatado)
             ).fetchone()
-            if cur:
-                label = dict(cur)
-
+            if label_row:
+                label = dict(label_row)
+        if not label:
+            conn.close()
+            flash("Etiqueta não encontrada para o lote informado.", "danger")
+            return redirect(url_for("movimentar", p=ponto_url))
         conn.close()
 
-    # =====================================================
-    # FUNÇÃO AUXILIAR: Define fase para nova etiqueta
-    # =====================================================
-    def get_fase_proximo_ponto(ponto, acao, label, model):
-        """
-        Retorna a fase correta da nova etiqueta dependendo do ponto e ação.
-        """
-        if ponto == "Ponto-02" and acao.upper() == "RECEBIMENTO":
-            # Recebimento SMT: aguardando produção
+    def get_fase(ponto, acao):
+        if ponto == "Ponto-02" and acao == "RECEBIMENTO":
             return "AGUARDANDO"
-        # outros pontos seguem fluxo padrão
         return "DISPONIVEL"
 
-    # =====================================================
-    # PROCESSAMENTO DO POST
-    # =====================================================
-    if request.method == "POST" and model:
-        acao = request.form.get("acao")
+    if request.method == "POST" and model and label:
+        acao = (request.form.get("acao") or "").strip().upper()
         ponto = request.form.get("ponto") or ponto_url
-        quantidade = int(request.form.get("quantidade") or (label["capacidade_magazine"] if label else 0))
-        acao_norm = acao.strip().upper() if acao else ""
+        conn = get_db()
+        setor_origem = label.get("setor_atual")
+        capacidade = int(label.get("capacidade_magazine") or 0)
+        remaining = int(label.get("remaining") or capacidade)
+        quantidade = int(request.form.get("quantidade") or 0)
 
-        print("=== DEBUG /mov POST ===")
-        print("full_code:", full_code)
-        print("label_id:", label["id"] if label else None)
-        print("acao_norm:", acao_norm)
-        print("ponto:", ponto)
-        print("setor_atual:", label.get("setor_atual") if label else None)
-        print("fase_atual:", label.get("fase") if label else None)
-
-        setor_origem = (label.get("setor_atual") if label else model.get("setor"))
-        setor_destino_guess = POINT_RULES.get(ponto, {}).get("setor") if ponto else setor_origem
-
-        # -----------------------------------------------------
-        # BLOQUEIO: evitar duplicidade (mesma raiz)
-        # -----------------------------------------------------
-        if label:
-            conn_chk = get_db()
-            label_id_raiz = int(label["id"])
-            loop_guard = 0
-
-            while True:
-                loop_guard += 1
-                if loop_guard > 50:
-                    break
-                row = conn_chk.execute(
-                    "SELECT linked_label_id FROM labels WHERE id=?",
-                    (label_id_raiz,)
-                ).fetchone()
-                if not row or not row["linked_label_id"]:
-                    break
-                try:
-                    label_id_raiz = int(row["linked_label_id"])
-                except:
-                    break
-
-            existe = conn_chk.execute("""
-                SELECT 1
-                FROM movements m
-                JOIN labels l ON m.label_id = l.id
-                WHERE (l.id = ? OR l.linked_label_id = ?)
-                  AND UPPER(m.acao) = ?
-                  AND m.ponto = ?
-                LIMIT 1
-            """, (label_id_raiz, label_id_raiz, acao_norm, ponto)).fetchone()
-
-            if existe:
-                conn_chk.close()
-                flash("❌ ESTA ETIQUETA (mesma raiz) JÁ FOI REGISTRADA NESTE SETOR COM ESTA AÇÃO.", "danger")
-                return redirect(url_for("movimentar", p=ponto_url) if ponto_url else url_for("movimentar"))
-
-            conn_chk.close()
-
-        # -----------------------------------------------------
-        # VALIDAÇÃO DE FLUXO
-        # -----------------------------------------------------
-        fluxo_valido = {
-            "RECEBIMENTO": ["PRODUCAO"],
-            "PRODUCAO": ["CQ", "RETRABALHO"],
-            "CQ": ["LIBERADO", "REJEICAO"],
-            "RETRABALHO": ["PRODUCAO"],
-            "LIBERADO": ["ESTOQUE"],
+        # ============================
+        # BLOQUEIO INTELIGENTE DE MOVIMENTAÇÃO DUPLICADA (USANDO MOVEMENTS)
+        # ============================
+        setor_destino_map = {
+            "Ponto-01": "PTH",
+            "Ponto-02": "SMT",
+            "Ponto-03": "SMT",
+            "Ponto-04": "IM",
+            "Ponto-05": "PA",
+            "Ponto-06": "IM",
+            "Ponto-07": "ESTOQUE"
         }
+        setor_destino = setor_destino_map.get(ponto)
 
-        fase_atual = (label.get("fase") or "").upper() if label else None
-        if fase_atual in fluxo_valido and acao_norm not in fluxo_valido[fase_atual]:
-            flash(f"❌ A ação '{acao_norm}' não é permitida após '{fase_atual}'.", "danger")
-            return redirect(url_for("movimentar", p=ponto_url) if ponto_url else url_for("movimentar"))
+        # Checa se já existe um movement registrado para esta label/ponto/acao
+        already = conn.execute(
+            "SELECT 1 FROM movements WHERE label_id=? AND ponto=? AND acao=? LIMIT 1",
+            (label.get("id"), ponto, acao)
+        ).fetchone()
 
-        # -----------------------------------------------------
-        # PROCESSAMENTO PRINCIPAL
-        # -----------------------------------------------------
-        try:
-            conn = get_db()
+        if already:
+            # já teve movimento idêntico — bloqueia
+            conn.close()
+            flash("Esta etiqueta já foi registrada aqui. Movimentação duplicada não permitida.", "danger")
+            return redirect(url_for("movimentar", p=ponto_url))
 
-            # -------- Ponto-01 (produção) --------
-            if ponto == "Ponto-01" and acao_norm == "PRODUCAO" and label:
-                remaining = int(label.get("remaining") or label.get("capacidade_magazine") or 0)
-                transfer = quantidade or remaining
+        # Opcional: proteção adicional para casos óbvios
+        # (evita PRODUCTION sendo registrada como 'produção' em mesmo setor se não houver mudança alguma)
+        if setor_destino == setor_origem:
+            # se for PRODUCAO e nada foi produzido (remaining == capacidade) - normalmente é OK permitir,
+            # por isso deixamos apenas um aviso (não bloqueamos), mas mantemos o bloqueio para RECEBIMENTO
+            if acao == "RECEBIMENTO":
+                conn.close()
+                flash("Recebimento já registrado anteriormente.", "danger")
+                return redirect(url_for("movimentar", p=ponto_url))
+            # para PRODUCAO não bloqueamos aqui — controle por movements garante que não contabilize duas vezes
 
-                if transfer <= 0 or transfer > remaining:
-                    flash("Quantidade inválida.", "danger")
-                    conn.close()
-                    return redirect(url_for("movimentar", p=ponto_url) if ponto_url else url_for("movimentar"))
 
-                # Atualiza etiqueta de origem
-                conn.execute("""
-                    UPDATE labels SET remaining=?, updated_at=? WHERE id=?
-                """, (remaining-transfer, datetime.now().isoformat(), label["id"]))
 
-                # Cria nova etiqueta filha
-                conn.execute("""
-                    INSERT INTO labels
-                    (model_id, lote, producao_total, capacidade_magazine, remaining, created_at,
-                     linked_label_id, setor_atual, fase)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    model["id"], label["lote"], transfer, transfer, transfer,
-                    datetime.now().isoformat(), label["id"], "PTH", "DISPONIVEL"
-                ))
+        # ============================================================== 
+        # MODELOS SMT-FIRST
+        # ============================================================== 
+        if model["code"] in SMT_FIRST_MODELS:
+            # Primeiro bip no SMT → registra produção local sem abater
+            if ponto == "Ponto-02" and acao == "PRODUCAO":
+                transfer = capacidade  # pega a capacidade total da etiqueta
 
-                new_label_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-                # registra
-                conn.execute("""
-                    INSERT INTO history (model_id, changed_at, changed_by, change_text)
-                    VALUES (?, ?, ?, ?)
-                """, (model["id"], datetime.now().isoformat(), "terminal_movimentacao",
-                      f"{acao} em {ponto} ({setor_origem}->PTH) qtd:{transfer}"))
-
-                register_movement(conn, model["id"], new_label_id, ponto, acao,
-                                  transfer, setor_origem, "PTH")
-
-                conn.commit()
-                flash(f"✅ Produção registrada ({transfer} un.)", "success")
-                return redirect(url_for("movimentar", p=ponto_url) if ponto_url else url_for("movimentar"))
-
-            # -------- PROCESSAMENTO GENÉRICO / NOVA ETIQUETA --------
-            if label:
-                remaining = int(label.get("remaining") or label.get("capacidade_magazine") or 0)
-                transfer = quantidade or remaining
-
-                if transfer <= 0 or transfer > remaining:
-                    flash("Quantidade inválida.", "danger")
-                    conn.close()
-                    return redirect(url_for("movimentar", p=ponto_url) if ponto_url else url_for("movimentar"))
-
-                # Atualiza origem
-                conn.execute("""
-                    UPDATE labels SET remaining=?, updated_at=? WHERE id=?
-                """, (remaining-transfer, datetime.now().isoformat(), label["id"]))
-
-                setor_destino = setor_destino_guess
-                fase_to_set = get_fase_proximo_ponto(ponto, acao_norm, label, model)
-
-                # cria nova etiqueta
+                # Cria nova label DISPONÍVEL no SMT
                 conn.execute("""
                     INSERT INTO labels
-                    (model_id, lote, producao_total, capacidade_magazine, remaining, created_at,
-                     linked_label_id, setor_atual, fase, top_done, bottom_done)
+                    (model_id, lote, producao_total, capacidade_magazine, remaining,
+                     created_at, linked_label_id, setor_atual, fase,
+                     top_done, bottom_done)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    model["id"], label["lote"], transfer, transfer, transfer,
-                    datetime.now().isoformat(), label["id"],
-                    setor_destino, fase_to_set,
-                    int(label.get("top_done") or 0),
-                    int(label.get("bottom_done") or 0),
+                    model["id"], label["lote"], transfer, capacidade, transfer,
+                    datetime.now().isoformat(), label["id"], "SMT", "DISPONIVEL",
+                    label.get("top_done"), label.get("bottom_done")
                 ))
 
-                new_label_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-                # registra histórico e movimento
-                conn.execute("""
-                    INSERT INTO history (model_id, changed_at, changed_by, change_text)
-                    VALUES (?, ?, ?, ?)
-                """, (model["id"], datetime.now().isoformat(), "terminal_movimentacao",
-                      f"{acao} em {ponto} ({setor_origem}->{setor_destino}) qtd:{transfer}"))
-
-                register_movement(conn, model["id"], new_label_id, ponto,
-                                  acao, transfer, setor_origem, setor_destino)
-
+                new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                register_movement(conn, model["id"], new_id, ponto, acao, transfer, setor_origem, "SMT")
                 conn.commit()
-                flash(f"✅ {acao} registrada ({transfer} un.)", "success")
-
-        except Exception as e:
-            try:
-                conn.rollback()
-            except:
-                pass
-            flash(f"Erro ao registrar movimentação: {e}", "danger")
-        finally:
-            try:
                 conn.close()
-            except:
-                pass
+                flash(f"Produção registrada no SMT ({transfer} un.)", "success")
+                return redirect(url_for("movimentar", p=ponto_url))
 
-        return redirect(url_for("movimentar", p=ponto_url) if ponto_url else url_for("movimentar"))
+            # RECEBIMENTO para PTH → abate SMT, cria label PTH
+            if ponto == "Ponto-01" and acao == "RECEBIMENTO":
+                transfer = capacidade
+                novo_remaining = max(remaining - transfer, 0)
+                conn.execute("UPDATE labels SET remaining=?, updated_at=? WHERE id=?",
+                             (novo_remaining, datetime.now().isoformat(), label["id"]))
 
-    # =====================================================
-    # RENDERIZAÇÃO
-    # =====================================================
-    return render_template(
-        "movimentar.html",
-        model=model,
-        label=label,
-        ponto=ponto_url,
-        hide_top_menu=True
-    )
+                conn.execute("""
+                    INSERT INTO labels
+                    (model_id, lote, producao_total, capacidade_magazine, remaining,
+                     created_at, linked_label_id, setor_atual, fase,
+                     top_done, bottom_done)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    model["id"], label["lote"], transfer, capacidade, transfer,
+                    datetime.now().isoformat(), label["id"], "PTH", "AGUARDANDO",
+                    label.get("top_done"), label.get("bottom_done")
+                ))
+                new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                register_movement(conn, model["id"], new_id, ponto, acao, transfer, "SMT", "PTH")
+                conn.commit()
+                conn.close()
+                flash(f"Recebimento registrado do SMT → PTH ({transfer} un.)", "success")
+                return redirect(url_for("movimentar", p=ponto_url))
 
+        # ============================================================== 
+        # FLUXO NORMAL (PTH → SMT) 
+        # ============================================================== 
+        if ponto == "Ponto-01" and acao == "PRODUCAO":
+            transfer = quantidade if quantidade > 0 else remaining
+            if transfer <= 0 or transfer > remaining:
+                conn.close()
+                flash("Quantidade inválida.", "danger")
+                return redirect(url_for("movimentar", p=ponto_url))
 
-def extract_real_code(qr_text):
-    """
-    Extrai um código REAL do QR em formato:
-        QUALQUER_MODELO-XX-XXX
-        
-    Onde QUALQUER_MODELO pode ser:
-        - Letras (A–Z)
-        - Números (0–9)
-        - Comprimento variável (1–30 chars)
+            # Abate PTH e cria nova label DISPONÍVEL
+            conn.execute("UPDATE labels SET remaining=?, updated_at=? WHERE id=?",
+                         (remaining - transfer, datetime.now().isoformat(), label["id"]))
 
-    E o lote final é sempre:
-        2 dígitos - 3 dígitos
-    """
+            conn.execute("""
+                INSERT INTO labels
+                (model_id, lote, producao_total, capacidade_magazine, remaining,
+                 created_at, linked_label_id, setor_atual, fase)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                model["id"], label["lote"], transfer, transfer, transfer,
+                datetime.now().isoformat(), label["id"], "PTH", "DISPONIVEL"
+            ))
+            new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            register_movement(conn, model["id"], new_id, ponto, acao, transfer, setor_origem, "PTH")
+            conn.commit()
+            conn.close()
+            flash(f"Produção registrada ({transfer} un.)", "success")
+            return redirect(url_for("movimentar", p=ponto_url))
 
-    if not qr_text:
-        return None
+        # RECEBIMENTO normal PTH → SMT
+        if ponto == "Ponto-02" and acao == "RECEBIMENTO":
+            transfer = capacidade
+            novo_remaining = max(remaining - transfer, 0)
+            conn.execute("UPDATE labels SET remaining=?, updated_at=? WHERE id=?",
+                         (novo_remaining, datetime.now().isoformat(), label["id"]))
 
-    # Remove espaços e caracteres estranhos
-    clean = qr_text.replace(" ", "").replace("Ç", ";").replace("ç", ";")
+            conn.execute("""
+                INSERT INTO labels
+                (model_id, lote, producao_total, capacidade_magazine, remaining,
+                 created_at, linked_label_id, setor_atual, fase,
+                 top_done, bottom_done)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                model["id"], label["lote"], transfer, capacidade, transfer,
+                datetime.now().isoformat(), label["id"], "SMT", "AGUARDANDO",
+                label.get("top_done"), label.get("bottom_done")
+            ))
+            new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            register_movement(conn, model["id"], new_id, ponto, acao, transfer, setor_origem, "SMT")
+            conn.commit()
+            conn.close()
+            flash(f"Recebimento registrado ({transfer} un.)", "success")
+            return redirect(url_for("movimentar", p=ponto_url))
 
-    # NOVO REGEX → aceita QUALQUER MODELO (1 a 30 chars alpha-numéricos)
-    regex = r"([A-Za-z0-9]{1,30}-\d{2}-\d{3})"
+        # ============================================================== 
+        # OUTROS PONTOS
+        # ============================================================== 
+        transfer = quantidade
+        if transfer <= 0:
+            conn.close()
+            flash("Quantidade inválida.", "danger")
+            return redirect(url_for("movimentar", p=ponto_url))
 
-    match = re.search(regex, clean)
-    if match:
-        return match.group(1)
+        if transfer > remaining:
+            conn.close()
+            flash(f"Movimentado {transfer}, mas só existe {remaining}.", "danger")
+            return redirect(url_for("movimentar", p=ponto_url))
 
-    return None
+        novo_remaining = remaining - transfer
+        conn.execute("UPDATE labels SET remaining=?, updated_at=? WHERE id=?",
+                     (novo_remaining, datetime.now().isoformat(), label["id"]))
 
+        destino_map = {
+            "Ponto-03": "SMT",
+            "Ponto-04": "IM",
+            "Ponto-05": "PA",
+            "Ponto-06": "IM",
+            "Ponto-07": "ESTOQUE"
+        }
+        setor_destino = destino_map.get(ponto, setor_origem)
+        fase_nova = get_fase(ponto, acao)
+        conn.execute("""
+            INSERT INTO labels
+            (model_id, lote, producao_total, capacidade_magazine, remaining,
+             created_at, linked_label_id, setor_atual, fase,
+             top_done, bottom_done)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            model["id"], label["lote"],
+            transfer, transfer, transfer,
+            datetime.now().isoformat(), label["id"],
+            setor_destino, fase_nova,
+            label.get("top_done"), label.get("bottom_done")
+        ))
+        new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        register_movement(conn, model["id"], new_id, ponto, acao, transfer, setor_origem, setor_destino)
+        conn.commit()
+        conn.close()
+        flash(f"{acao} registrada ({transfer} un.)", "success")
+        return redirect(url_for("movimentar", p=ponto_url))
+
+    return render_template("movimentar.html", model=model, label=label, ponto=ponto_url, hide_top_menu=True, clean_display_code=clean_display_code)
+
+def extract_real_code(raw):
+    if not raw:
+        return ""
+
+    # Trocar caracteres errados
+    cleaned = raw.replace("ç", ";").replace(";;", ";")
+    cleaned = cleaned.replace("http", "").replace("https", "")
+    cleaned = cleaned.replace("://", "").replace("/", "").replace(":", "")
+
+    # Divide por ';'
+    partes = cleaned.split(";")
+
+    for p in reversed(partes):
+        p = p.strip()
+        if p:
+            return p
+
+    return cleaned.strip()
+
+def clean_display_qr(raw):
+    if not raw:
+        return ""
+
+    real = extract_real_code(raw)
+    if real:
+        return real
+
+    # Limpeza básica, se nada for encontrado
+    txt = raw.upper()
+    txt = (txt.replace("HTTP", "")
+               .replace("Ç", "")
+               .replace("ç", "")
+               .replace(";", "")
+               .replace(":", "")
+               .strip())
+    return txt
 
 @app.route("/dashboard")
 def dashboard():
@@ -844,7 +824,6 @@ def dashboard():
         })
     conn.close()
     return render_template("dashboard.html", data=dashboard_data)
-
 
 @app.route("/history/<int:id>")
 def history(id):
@@ -908,7 +887,6 @@ def etiqueta(code):
     if not model_row:
         return f"<h3>❌ Etiqueta não encontrada para código '{base_code}'.</h3>", 404
 
-    # Converte row para dict mutável
     model = dict(model_row)
 
     # 🔹 Substitui o lote apenas visualmente, sem alterar o banco

@@ -18,8 +18,9 @@
                 <button type="button" class="btn btn-outline-dark btn-sm fw-bold btn-setor" onclick="filterBySetor('ESTOQUE')">Estoque</button>
                 <button type="button" class="btn btn-outline-secondary btn-sm fw-bold btn-setor" onclick="filterBySetor('TODOS')">Mostrar Todos</button>
             </div>
+
             <form id="searchForm" class="d-inline-flex ms-3">
-                <input type="text" id="searchInput" class="form-control me-2" placeholder="Pesquisar...">
+                <input type="text" id="searchInput" class="form-control me-2" placeholder="Buscar por...">
                 <button type="submit" class="btn btn-outline-primary">Buscar</button>
             </form>
         </div>
@@ -29,8 +30,19 @@
     <div class="d-flex justify-content-start flex-wrap gap-2 mb-4">
         <button type="button" class="btn btn-outline-warning btn-sm fw-bold btn-status" onclick="filterByStatus('AGUARDANDO')">🕓 Aguardando</button>
         <button type="button" class="btn btn-outline-success btn-sm fw-bold btn-status" onclick="filterByStatus('DISPONIVEL')">✅ Disponível</button>
-        <button type="button" class="btn btn-outline-info btn-sm fw-bold btn-status" onclick="filterByStatus('EXPEDIDO')">📦 Expedido</button>   
+        <button type="button" class="btn btn-outline-info btn-sm fw-bold btn-status" onclick="filterByStatus('EXPEDIDO')">📦 Expedido</button>
         <button type="button" class="btn btn-outline-secondary btn-sm fw-bold btn-status" onclick="filterByStatus('TODOS')">Mostrar Todos</button>
+
+        <!-- 🔵 SELECT DE CLIENTES -->
+        <select id="clienteSelect" class="form-select form-select-sm fw-bold" style="width: 200px;"
+                onchange="filterByCliente(this.value)">
+            <option value="TODOS">CLIENTES: TODOS</option>
+
+            {% set clientes_unicos = data | map(attribute='model.cliente') | list | unique %}
+            {% for cliente in clientes_unicos %}
+                <option value="{{ cliente|upper }}">{{ cliente }}</option>
+            {% endfor %}
+        </select>
     </div>
 
     <div id="totalGeralBox" style="background-color: #cce5ff; color: #004085; font-weight: bold; padding: 10px; border-radius: 8px; margin-bottom: 15px;">
@@ -41,23 +53,27 @@
     <div class="table-responsive shadow-sm rounded-4 bg-light p-3">
         <table class="table table-hover table-bordered align-middle" id="dashboardTable">
             <thead class="table-primary text-center">
-                <tr>
-                    <th>Modelo</th>
-                    <th>Código</th>
-                    <th>Setor</th>
-                    <th>Fase</th>
-                    <th>Saldo</th>
-                </tr>
+            <tr>
+                <th>Cliente</th>
+                <th>Modelo</th>
+                <th>Código</th>
+                <th>OP</th>   
+                <th>Setor</th>
+                <th>Fase</th>
+                <th>Saldo Blank</th>
+            </tr>
             </thead>
             <tbody>
                 {% for item in data %}
                     {% for saldo in item.saldo_setores %}
-                    <tr class="text-center" 
+                    <tr class="text-center"
                         data-setor="{{ saldo.setor }}"
                         data-status="{{ saldo.status }}">
+                        <td class="fw-bold">{{ item.model.cliente }}</td>
                         <td class="fw-bold">{{ item.model.model_name }}</td>
-                        <td>{{ item.model.code }}</td>
-                        <td>{{ saldo.setor }}</td>
+                        <td class="fw-bold">{{ item.model.code }}</td>
+                        <td class="fw-bold text-primary">{{ item.model.op }}</td>
+                        <td class="fw-bold">{{ saldo.setor }}</td>
                         <td>
                             {% if saldo.status == "AGUARDANDO" %}
                                 <span class="badge bg-warning text-dark">{{ saldo.fase }}</span>
@@ -69,7 +85,7 @@
                                 <span class="badge bg-secondary">{{ saldo.fase }}</span>
                             {% endif %}
                         </td>
-                        <td class="fw-semibold">{{ saldo.saldo }}</td>
+                        <td class="fw-bold">{{ saldo.saldo }}</td>
                     </tr>
                     {% endfor %}
                 {% endfor %}
@@ -79,9 +95,11 @@
 </div>
 
 <script>
-let currentSetor = 'TODOS';
-let currentStatus = 'TODOS';
+
+let currentSetor = 'PTH';
+let currentStatus = 'DISPONIVEL';
 let currentSearch = '';
+let currentCliente = 'TODOS';
 
 function normalize(value) {
     return (value || "").toString().trim().toUpperCase();
@@ -91,9 +109,9 @@ function getRows() {
     return Array.from(document.querySelectorAll('#dashboardTable tbody tr'));
 }
 
-// -----------------------------
-// APLICA TODOS OS FILTROS
-// -----------------------------
+/* ---------------------------
+   APLICA TODOS OS FILTROS
+----------------------------- */
 function applyFilters() {
     const rows = getRows();
 
@@ -101,55 +119,61 @@ function applyFilters() {
         const rowSetor = normalize(row.dataset.setor);
         const rowStatus = normalize(row.dataset.status);
         const rowText = normalize(row.innerText);
+        const rowCliente = normalize(row.querySelector('td:nth-child(1)').innerText);
 
         const okSetor = currentSetor === "TODOS" || rowSetor === currentSetor;
         const okStatus = currentStatus === "TODOS" || rowStatus === currentStatus;
+        const okCliente = currentCliente === "TODOS" || rowCliente === currentCliente;
         const okSearch = currentSearch === "" || rowText.includes(currentSearch);
 
-        row.style.display = (okSetor && okStatus && okSearch) ? '' : 'none';
+        row.style.display = (okSetor && okStatus && okCliente && okSearch) ? '' : 'none';
     });
 
     calcularTotalGeral();
 }
 
-// -----------------------------
-// FILTROS DE SETOR
-// -----------------------------
+/* ---------------------------
+   BOTÕES DE SETOR
+----------------------------- */
 function filterBySetor(setor) {
     currentSetor = normalize(setor);
     setActiveSetorBtn(setor);
     applyFilters();
 }
 
-// -----------------------------
-// FILTROS DE STATUS
-// -----------------------------
+/* ---------------------------
+   BOTÕES DE STATUS
+----------------------------- */
 function filterByStatus(status) {
     currentStatus = normalize(status);
     setActiveStatusBtn(status);
     applyFilters();
 }
 
-// -----------------------------
-// CAMPO DE BUSCA (NÃO RECARREGA A PÁGINA)
-// -----------------------------
+/* ---------------------------
+   BUSCA
+----------------------------- */
 document.addEventListener("DOMContentLoaded", () => {
     const form = document.getElementById("searchForm");
     const searchInput = document.getElementById("searchInput");
+    document.getElementById("clienteSelect").value = "TODOS";
+
 
     form.addEventListener("submit", function (e) {
-        e.preventDefault(); 
-
+        e.preventDefault();
         currentSearch = normalize(searchInput.value);
         applyFilters();
     });
 
+    setActiveSetorBtn('PTH');
+    setActiveStatusBtn('DISPONIVEL');
+
     applyFilters();
 });
 
-// -----------------------------
-// ATIVA BOTÕES VISUALMENTE
-// -----------------------------
+/* ---------------------------
+   ESTILO DOS BOTÕES
+----------------------------- */
 function setActiveSetorBtn(setor) {
     document.querySelectorAll('.btn-setor').forEach(btn => btn.classList.remove('active'));
     const btn = document.querySelector(`[onclick="filterBySetor('${setor}')"]`);
@@ -162,14 +186,19 @@ function setActiveStatusBtn(status) {
     if (btn) btn.classList.add('active');
 }
 
-// -----------------------------
-// SOMA
-// -----------------------------
+function filterByCliente(cliente) {
+    currentCliente = normalize(cliente);
+    applyFilters();
+}
+
+/* ---------------------------
+   SOMA DO TOTAL EXIBIDO
+----------------------------- */
 function calcularTotalGeral() {
     let total = 0;
     getRows().forEach(row => {
         if (row.style.display !== 'none') {
-            const saldo = parseInt(row.querySelector('td:nth-child(5)').innerText) || 0;
+            const saldo = parseInt(row.querySelector('td:nth-child(7)').innerText) || 0;
             total += saldo;
         }
     });
